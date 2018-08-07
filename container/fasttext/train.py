@@ -1,0 +1,91 @@
+#!/usr/bin/env python
+
+# All the training code for building fasttext model goes here
+
+from __future__ import print_function
+
+import os
+import json
+import pickle
+import sys
+import traceback
+import pandas as pd
+from fastText import train_supervised
+from sklearn.utils import shuffle
+
+
+prefix = '/opt/ml/'
+
+input_path = prefix + 'input/data'
+output_path = os.path.join(prefix, 'output')
+model_path = os.path.join(prefix, 'model')
+param_path = os.path.join(prefix, 'input/config/hyperparameters.json')
+
+
+channel_name='training'
+training_path = os.path.join(input_path, channel_name)
+training_file_cols = ["label", "input"]
+training_data_path = "ft_input.csv"
+
+def train():
+    print('Starting the training.')
+    try:
+
+        with open(param_path, 'r') as tc:
+            trainingParams = json.load(tc)
+
+
+        input_files = [os.path.join(training_path, file) for file in os.listdir(training_path)]
+        if len(input_files) == 0:
+            raise ValueError(('There are no files in {}.\n' +
+                              'This usually indicates that the channel ({}) was incorrectly specified,\n' +
+                              'the data specification in S3 was incorrectly specified or the role specified\n' +
+                              'does not have permission to access the data.').format(training_path, channel_name))
+
+        raw_data = [pd.read_csv(file, header=None) for file in input_files ]
+        train_data = pd.concat(raw_data)
+
+        column_names = train_data.columns
+        if column_names != training_file_cols:
+            raise ValueError('Expected column Names are ({}) \n' +
+                             'Got the column names ({}) in input '.format(training_file_cols, column_names))
+
+
+        train_data = shuffle(shuffle(train_data))
+
+        train_data["fin_input"] = train_data.apply(lambda x : "__label__"+x["label"] + " " +x["input"],
+                                                   axis =1)
+
+        train_data["fin_input"].to_csv("ft_input.csv", sep="\t", index=False)
+        print('Generated input in the format fasttext requires!!')
+
+        #hyperparams hardcoded for now
+
+        hyper_params = {"lr": 0.01,
+                        "epoch": 20,
+                        "wordNgrams": 2,
+                        "dim": 20}
+
+        model = train_supervised(input=training_data_path, **hyper_params)
+        print("Model trained with the hyperparameter \n {}".format(hyper_params))
+        model.quantize(input=training_data_path, qnorm=True, retrain=True, cutoff=100000)
+        print("Model is quantized!!")
+        model.save_model(os.path.join(model_path,"model.ftz"))
+
+        print('Training complete.')
+    except Exception as e:
+        # Write out an error file. This will be returned as the failureReason in the
+        # DescribeTrainingJob result.
+        trc = traceback.format_exc()
+        with open(os.path.join(output_path, 'failure'), 'w') as s:
+            s.write('Exception during training: ' + str(e) + '\n' + trc)
+        # Printing this causes the exception to be in the training job logs, as well.
+        print('Exception during training: ' + str(e) + '\n' + trc, file=sys.stderr)
+        # A non-zero exit code causes the training job to be marked as Failed.
+        sys.exit(255)
+
+if __name__ == '__main__':
+    train()
+
+    # A zero exit code causes the job to be marked a Succeeded.
+    sys.exit(0)
