@@ -4,15 +4,9 @@
 from __future__ import print_function
 
 import os
-import json
-import pickle
 import StringIO
-import sys
-import signal
-import traceback
 import fastText as ft
 import flask
-
 import pandas as pd
 
 prefix = '/opt/ml/'
